@@ -7,7 +7,6 @@
 </head>
 <body>
 <title>Teller-Match</title>
-<meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Figtree:wght@400;500;600&display=swap">
 <style>
@@ -149,6 +148,7 @@ nav button[aria-selected="true"]{color:var(--ink);background:var(--chip)}
     <h1 class="brand">Teller<span>-</span>Match</h1>
     <div class="who" id="whoLine"></div>
   </header>
+  <div class="status" id="cloudStatus" role="status" aria-live="polite" style="padding:0 2px 6px" hidden></div>
   <main>
     <section class="view" id="swipe" aria-label="Wischen">
       <div class="progress"><span id="progMe"></span><span id="progOther"></span></div>
@@ -170,6 +170,7 @@ nav button[aria-selected="true"]{color:var(--ink);background:var(--chip)}
     <section class="view" id="matches" aria-label="Matches" hidden></section>
 
     <section class="view" id="more" aria-label="Mehr" hidden>
+      <div class="panel" id="syncPanel"></div>
       <div class="panel">
         <h4>Wer seid ihr?</h4>
         <div class="row">
@@ -221,7 +222,6 @@ nav button[aria-selected="true"]{color:var(--ink);background:var(--chip)}
         </form>
       </div>
 
-      <div class="panel" id="syncPanel"></div>
 
       <div class="panel">
         <h4>Neu anfangen</h4>
@@ -243,7 +243,7 @@ nav button[aria-selected="true"]{color:var(--ink);background:var(--chip)}
 <div class="overlay" id="whoOverlay" hidden>
   <div class="sheet">
     <h2>Wer wischt hier?</h2>
-    <p class="muted" style="margin:0">Wähl dich aus. Die andere Person öffnet denselben Link auf ihrem Handy und wählt sich dort aus.</p>
+    <p class="muted" style="margin:0">Wähl dich aus. Unter „Mehr“ kannst du eure Handys mit einem privaten Einladungslink verbinden.</p>
     <button class="btn" id="pickA"></button>
     <button class="btn ghost" id="pickB"></button>
     <p class="status" style="margin:0">Namen kannst du später unter „Mehr“ ändern.</p>
@@ -262,7 +262,11 @@ nav button[aria-selected="true"]{color:var(--ink);background:var(--chip)}
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
-<script>
+<script type="module">
+import { CloudSync } from './sync.js';
+import { syncConfig } from './sync-config.js';
+import { invitationToken } from './sync-core.js';
+import { createCloudUI } from './cloud-ui.js';
 (function(){
 "use strict";
 
@@ -709,7 +713,8 @@ const SWATCHES = ["#C2502F","#E9C66A","#D9893B","#7E2F1C","#6AA84F","#E8862A","#
 const BGS = ["#F6D9C3","#DCE8D2","#D7E3EE","#F3E2B5","#EAD7E4","#E4E0D0","#CFE6E1","#F2D0CC"];
 
 /* ---------- State ---------- */
-let db = null;
+let cloud = null, cloudUI = null;
+const joinToken = invitationToken(location.hash);
 let names = {a:"Daniel", b:"Stina"};
 let me = lsGet("tm_who");
 const swipes = {a:{}, b:{}};
@@ -773,11 +778,11 @@ function illo(d){
 }
 
 function pic(d){
+  if(d.photo?.startsWith("remote:")) return d._photoUrl ? `<img class="photo" src="${esc(d._photoUrl)}" alt="${esc(d.name)}" draggable="false" loading="lazy">` : illo(d);
   if(d.photo && d.photo.startsWith("local:")){
     const url=localPhotoUrls.get(d.photo);
     return url ? `<img class="photo" src="${esc(url)}" alt="${esc(d.name)}" draggable="false" loading="lazy">` : illo(d);
   }
-  if(d.photo && /^[0-9a-f]{32}$/.test(d.photo)) return `<img class="photo" src="/_blob/${d.photo}" alt="${esc(d.name)}" draggable="false" loading="lazy">`;
   const c=PHOTOS[d.id];
   if(!c) return illo(d);
   return `<img class="photo" src="fotos/${d.id}.jpg" alt="${esc(d.name)}" draggable="false" loading="lazy">`;
@@ -793,6 +798,10 @@ function rated(w){ return allDishes().filter(d=>d.id in swipes[w]).length; }
 
 /* ---------- Render ---------- */
 function renderHeader(){
+  $("meA").disabled=!!cloud?.connected&&me!=="a";
+  $("meB").disabled=!!cloud?.connected&&me!=="b";
+  $("cloudStatus").hidden=!cloud?.configured;
+  $("cloudStatus").textContent=cloud?.status||"";
   $("whoLine").innerHTML = me ? `wischt als <b>${esc(names[me])}</b>` : "";
   $("pickA").textContent = names.a; $("pickB").textContent = names.b;
   $("meA").textContent = names.a; $("meB").textContent = names.b;
@@ -864,41 +873,7 @@ function renderMatches(){
   };
 }
 
-function renderSync(){
-  const p=$("syncPanel");
-  if(db){
-    p.innerHTML=`<h4>Abgleich</h4><p class="status" style="margin:0">Live verbunden. Was ${esc(names.a)} und ${esc(names.b)} wischen, wird automatisch abgeglichen.</p>`;
-    return;
-  }
-  p.innerHTML=`<h4>Abgleich ohne Verbindung</h4>
-   <p class="status" style="margin:0">Die Live-Verbindung ist auf diesem Gerät gerade nicht verfügbar. Ihr könnt eure Entscheidungen trotzdem per Code austauschen: Kopier deinen Code, schick ihn der anderen Person und füg ihren Code hier ein.</p>
-   <textarea id="myCode" readonly aria-label="Dein Code"></textarea>
-   <button class="btn ghost" id="copyCode" type="button">Meinen Code kopieren</button>
-   <label for="theirCode">Code von ${esc(names[other(me||"a")])}<textarea id="theirCode"></textarea></label>
-   <button class="btn" id="loadCode" type="button">Code übernehmen</button>`;
-  if(me){
-    const payload={w:me,l:Object.keys(swipes[me]).filter(k=>swipes[me][k]),n:Object.keys(swipes[me]).filter(k=>!swipes[me][k])};
-    $("myCode").value="TM1:"+btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
-  }
-  $("copyCode").onclick=()=>{
-    const t=$("myCode");
-    const fallback=()=>{t.select();toast("Code markiert, jetzt kopieren");};
-    if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(t.value).then(()=>toast("Code kopiert")).catch(fallback); else fallback();
-  };
-  $("loadCode").onclick=()=>{
-    try{
-      const raw=$("theirCode").value.trim().replace(/^TM1:/,"");
-      const obj=JSON.parse(decodeURIComponent(escape(atob(raw))));
-      if(obj.w!=="a"&&obj.w!=="b") throw 0;
-      if(obj.w===me){toast("Das ist dein eigener Code");return;}
-      swipes[obj.w]={};
-      (obj.l||[]).forEach(id=>swipes[obj.w][id]=true);
-      (obj.n||[]).forEach(id=>swipes[obj.w][id]=false);
-      saveLocal(); renderAll();
-      toast(`${matchList().length} Matches gefunden`);
-    }catch(e){toast("Der Code ist ungültig. Bitte vollständig einfügen.");}
-  };
-}
+function renderSync(){ cloudUI?.render(); }
 
 function renderExcl(){
   const el=$("exclChips"); if(!el) return;
@@ -906,7 +881,7 @@ function renderExcl(){
   el.querySelectorAll("button").forEach(b=>b.onclick=()=>{ excl.splice(+b.dataset.i,1); saveExcl(); });
 }
 function saveExcl(){
-  if(db) db.doc("couple/config").set({a:names.a,b:names.b,excl}).catch(()=>toast("Speichern hat nicht geklappt"));
+  if(cloud?.connected) cloud.enqueue('settings',{exclusions:[...excl]}).catch(e=>toast(e.message));
   else saveLocal();
   topCardId=null; renderAll();
 }
@@ -915,7 +890,7 @@ $("exclForm").addEventListener("submit",e=>{
   if(!excl.some(x=>x.toLowerCase()===v.toLowerCase())) excl.push(v);
   $("exclIn").value=""; saveExcl(); toast(`„${v}“ wird ausgeblendet`);
 });
-function renderAll(){ renderExcl(); renderHeader(); renderDeck(); if(tab==="matches") renderMatches(); if(tab==="more") renderSync(); $("whoOverlay").hidden = !!me || !ready; }
+function renderAll(){ renderExcl(); renderHeader(); renderDeck(); if(tab==="matches") renderMatches(); if(tab==="more") renderSync(); $("whoOverlay").hidden = !!me || !ready || !!joinToken; }
 
 /* ---------- Tabs ---------- */
 function setTab(t){
@@ -950,7 +925,7 @@ function commit(id,like){
 function undo(){
   const id=undoStack.pop(); if(!id) return;
   delete swipes[me][id];
-  if(db){ db.doc(`swipes/${me}_${id}`).delete().catch(()=>{}); } else saveLocal();
+  if(cloud?.connected) cloud.enqueue('vote',{dish:id,liked:null}).catch(e=>toast(e.message)); else saveLocal();
   topCardId=null; renderAll();
 }
 $("yesBtn").onclick=()=>decide(true);
@@ -994,14 +969,14 @@ let toastT;
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.hidden=false; clearTimeout(toastT); toastT=setTimeout(()=>t.hidden=true,2600); }
 
 /* ---------- Who am I ---------- */
-function setMe(w){ me=w; lsSet("tm_who",w); undoStack.length=0; topCardId=null; renderAll(); }
+function setMe(w){ if(cloud?.connected&&w!==cloud.view.me.slot){toast('Dieses Gerät ist fest mit deinem Platz verbunden.');return;} me=w; lsSet("tm_who",w); undoStack.length=0; topCardId=null; renderAll(); }
 $("pickA").onclick=()=>setMe("a"); $("pickB").onclick=()=>setMe("b");
 $("meA").onclick=()=>setMe("a"); $("meB").onclick=()=>setMe("b");
 
 $("saveNames").onclick=()=>{
   const a=$("nameA").value.trim()||"Person 1", b=$("nameB").value.trim()||"Person 2";
   names={a,b};
-  if(db) db.doc("couple/config").set({a,b,excl}).catch(()=>toast("Speichern hat nicht geklappt"));
+  if(cloud?.connected) cloud.enqueue('settings',{names:{a,b}}).catch(e=>toast(e.message));
   else saveLocal();
   renderAll(); toast("Namen gespeichert");
 };
@@ -1010,7 +985,7 @@ $("saveNames").onclick=()=>{
 let swatch=SWATCHES[0];
 $("swatches").innerHTML=SWATCHES.map((c,i)=>`<button type="button" style="background:${c}" aria-label="Farbe ${i+1}" aria-pressed="${i===0}" data-c="${c}"></button>`).join("");
 $("swatches").querySelectorAll("button").forEach(b=>b.onclick=()=>{swatch=b.dataset.c;$("swatches").querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));});
-let assets=null, photoFile=null, previewUrl=null;
+let photoFile=null, previewUrl=null;
 const localPhotoUrls = new Map();
 let photoDatabase;
 function openPhotoDatabase(){
@@ -1075,10 +1050,10 @@ async function shrink(file){
   return await new Promise((resolve,reject)=>c.toBlob(blob=>blob?resolve(blob):reject(new Error("Bild konnte nicht verarbeitet werden")),"image/jpeg",0.82));
 }
 function setPhotoAvailability(){
-  const ok=!!assets||(!db&&!!window.indexedDB);
+  const ok=!!window.indexedDB;
   $("fPhoto").disabled=!ok;
   document.querySelector(".filebtn").style.opacity=ok?"":"0.45";
-  $("photoNote").textContent = assets ? "JPG, PNG oder WebP, maximal 20 MB. Dein Foto wird automatisch verkleinert." : db ? "In dieser Live-Verbindung können gerade keine Fotos gespeichert werden." : ok ? "Dein Foto wird verkleinert und nur in diesem Browser gespeichert. Es bleibt nach dem Neuladen erhalten und wird nicht per Abgleich-Code geteilt. Maximal 20 MB." : "Dein Browser unterstützt den Fotospeicher nicht. Ein Gericht kannst du auch ohne Foto hinzufügen.";
+  $("photoNote").textContent = cloud?.connected ? "Dein Foto wird verkleinert und privat zwischen euren Geräten geteilt. Ohne Internet wird es vorgemerkt. JPG, PNG oder WebP, maximal 20 MB." : ok ? "Dein Foto wird verkleinert und auf diesem Gerät gespeichert. Verbinde eure Handys unter „Mehr“, damit es automatisch geteilt wird. Maximal 20 MB." : "Dein Browser unterstützt den Fotospeicher nicht. Ein Gericht kannst du auch ohne Foto hinzufügen.";
 }
 $("addForm").addEventListener("submit",async e=>{
   e.preventDefault();
@@ -1092,12 +1067,10 @@ $("addForm").addEventListener("submit",async e=>{
   try{
     if(photoFile){
       const blob=await shrink(photoFile);
-      if(assets){ const up=await assets.upload(blob); d.photo=up.id; }
-      else if(!db) d.photo=await savePhoto(blob);
-      else throw new Error("Keine Fotoverbindung");
+      d.photo=await savePhoto(blob);
     }
-    if(db){
-      await db.doc("dishes/"+d.id).set(d);
+    if(cloud?.connected){
+      await cloud.enqueue('dish',{dish:d},d.photo||null);
       if(!custom.some(item=>item.id===d.id)) custom.push(d);
     }else{
       custom.push(d);
@@ -1123,11 +1096,10 @@ $("addForm").addEventListener("submit",async e=>{
 function onResetClick(){
   $("resetBox").innerHTML=`<span class="status">Wirklich alle deine Entscheidungen löschen?</span><button class="btn warn" id="resetYes">Ja, löschen</button><button class="btn ghost" id="resetNo">Abbrechen</button>`;
   $("resetNo").onclick=restoreReset;
-  $("resetYes").onclick=()=>{
-    const ids=Object.keys(swipes[me]||{});
+  $("resetYes").onclick=async()=>{
+    if(cloud?.connected){try{await cloud.enqueue('reset',{});}catch(e){toast(e.message);return;}}
     swipes[me]={}; undoStack.length=0;
-    if(db) ids.forEach(id=>db.doc(`swipes/${me}_${id}`).delete().catch(()=>{}));
-    else saveLocal();
+    if(!cloud?.connected) saveLocal();
     restoreReset(); topCardId=null; renderAll(); toast("Zurückgesetzt");
   };
 }
@@ -1136,13 +1108,11 @@ $("resetBtn").onclick=onResetClick;
 
 /* ---------- Persistence ---------- */
 function persistSwipe(id,like){
-  if(db){
-    db.doc(`swipes/${me}_${id}`).set({who:me,dish:id,like,at:Date.now()}).catch(err=>{
-      toast(err&&err.code==="quota_exceeded"?"Speicher voll":"Konnte nicht speichern, bitte nochmal");
-    });
-  } else saveLocal();
+  if(cloud?.connected) cloud.enqueue('vote',{dish:id,liked:like}).catch(e=>toast(e.message));
+  else saveLocal();
 }
 function saveLocal(){
+  if(cloud?.connected) return true; // Preserve the pre-migration backup.
   try{ localStorage.setItem("tm_local",JSON.stringify({names,swipes,custom,excl})); return true; }
   catch(e){ toast("Speicher voll oder gesperrt. Änderungen konnten nicht gespeichert werden."); return false; }
 }
@@ -1152,27 +1122,32 @@ function loadLocal(){
   }catch(e){}
 }
 
+function legacyData(){ return {me,names:structuredClone(names),excl:[...excl],custom:structuredClone(custom),swipes:structuredClone(swipes)}; }
 async function init(){
-  renderAll();
-  try{ db = window.claude && window.claude.use ? await window.claude.use("db") : null; }catch(e){ db=null; }
-  try{ assets = window.claude && window.claude.use ? await window.claude.use("assets") : null; }catch(e){ assets=null; }
-  setPhotoAvailability();
-  if(!db){ loadLocal(); await restorePhotos(); ready=true; renderAll(); return; }
-  let firstSwipes=true;
-  db.doc("couple/config").onSnapshot(s=>{ if(s.exists){ const v=s.data(); names={a:v.a||"Person 1",b:v.b||"Person 2"}; if(Array.isArray(v.excl)) excl=v.excl; } renderAll(); },()=>{});
-  db.collection("dishes").onSnapshot(q=>{ custom=q.docs.map(d=>d.data()).filter(d=>d&&d.id&&d.name); topCardId=null; renderAll(); },()=>{});
-  db.collection("swipes").onSnapshot(q=>{
-    const before = me ? new Set(matchList().map(d=>d.id)) : new Set();
-    swipes.a={}; swipes.b={};
-    q.docs.forEach(doc=>{ const v=doc.data(); if(v && (v.who==="a"||v.who==="b") && v.dish) swipes[v.who][v.dish]=!!v.like; });
-    if(!firstSwipes && me){
-      const fresh=matchList().filter(d=>!before.has(d.id));
-      fresh.forEach(d=>{ if(undoStack[undoStack.length-1]!==d.id) toast(`Neues Match: ${d.name}`); });
+  loadLocal(); await restorePhotos();
+  const legacy=legacyData(); let signature='';let first=true;
+  cloud=new CloudSync(syncConfig,{
+    photo:id=>photoStore('readonly',store=>store.get(id)),
+    message:toast,
+    changed:()=>{renderHeader();if(tab==='more')renderSync();setPhotoAvailability();},
+    snapshot:(snapshot,urls)=>{
+      const next=JSON.stringify([snapshot,[...urls]]);if(next===signature)return;signature=next;
+      const before=new Set(matchList().map(d=>d.id));
+      names=snapshot.room.names;excl=snapshot.room.exclusions;
+      me=snapshot.me.slot;lsSet('tm_who',me);
+      const slots=Object.fromEntries(snapshot.members.map(m=>[m.id,m.slot]));
+      swipes.a={};swipes.b={};
+      for(const v of snapshot.votes)if(v.liked!==null&&slots[v.member_id])swipes[slots[v.member_id]][v.dish_id]=v.liked;
+      custom=snapshot.dishes.map(d=>({...d.data,by:slots[d.member_id],photo:d.photo_local||(d.photo_path?'remote:'+d.photo_path:null),_photoUrl:urls.get(d.photo_path)?.url}));
+      topCardId=null;renderAll();
+      if(!first)for(const d of matchList())if(!before.has(d.id))toast(`Neues Match: ${d.name}`);
+      first=false;
     }
-    if(!q.metadata.fromCache) firstSwipes=false;
-    ready=true; renderAll();
-  },()=>{ ready=true; renderAll(); });
-  setTimeout(()=>{ ready=true; renderAll(); },2500);
+  });
+  cloudUI=createCloudUI({cloud,joinToken,legacy:legacyData,message:toast,me:()=>me,names:()=>names});
+  ready=true;renderAll();setPhotoAvailability();
+  if(joinToken)setTab('more');
+  try{await cloud.start();if(cloud.connected)await cloud.importLegacy(legacy);}catch(e){cloud.error=e.message;renderSync();}
 }
 init();
 })();

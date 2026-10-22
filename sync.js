@@ -182,8 +182,9 @@ export class CloudSync {
     const run = async () => {
       try {
         if (!navigator.onLine) throw new Error('Offline');
-        this.status = 'Wird synchronisiert'; this.error = ''; this.notify();
         this.state = this.read();
+        if (this.state.queue.length) this.status = 'Wird synchronisiert';
+        this.error = ''; this.notify();
         while (this.state.queue.length) {
           const task = this.state.queue[0];
           if (task.member !== this.state.snapshot.me.id) throw new Error('Vorgemerkte Änderungen gehören zu einem anderen Gerät.');

@@ -48,7 +48,8 @@ export function createCloudUI({ cloud, joinToken, legacy, message, me, names }) 
         $('restoreRoom').onclick=()=>run(()=>cloud.restore($('restoreCode').value));
       }
     }
-    if($('syncState'))$('syncState').textContent=cloud.status+(cloud.state.queue.length?` · ${cloud.state.queue.length} Änderung(en) vorgemerkt`:'');
+    const status=cloud.status+(cloud.state.queue.length?` · ${cloud.state.queue.length} Änderung(en) vorgemerkt`:'');
+    if($('syncState')&&$('syncState').textContent!==status)$('syncState').textContent=status;
     if($('syncError')){ $('syncError').textContent=cloud.error;$('syncError').hidden=!cloud.error; }
   }
   return {render};

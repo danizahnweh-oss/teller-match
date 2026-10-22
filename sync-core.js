@@ -14,6 +14,7 @@ export function projectSnapshot(snapshot, queue) {
       const vote = { member_id: view.me.id, dish_id: p.dish, liked: p.liked };
       if (index < 0) view.votes.push(vote); else view.votes[index] = vote;
     } else if (task.kind === 'settings') {
+      if (p.revision < view.room.revision) continue;
       if (p.names) view.room.names = p.names;
       if (p.exclusions) view.room.exclusions = p.exclusions;
       view.room.revision++;

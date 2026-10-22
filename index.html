@@ -801,7 +801,7 @@ function renderHeader(){
   $("meA").disabled=!!cloud?.connected&&me!=="a";
   $("meB").disabled=!!cloud?.connected&&me!=="b";
   $("cloudStatus").hidden=!cloud?.configured;
-  $("cloudStatus").textContent=cloud?.status||"";
+  if($("cloudStatus").textContent!==(cloud?.status||""))$("cloudStatus").textContent=cloud?.status||"";
   $("whoLine").innerHTML = me ? `wischt als <b>${esc(names[me])}</b>` : "";
   $("pickA").textContent = names.a; $("pickB").textContent = names.b;
   $("meA").textContent = names.a; $("meB").textContent = names.b;

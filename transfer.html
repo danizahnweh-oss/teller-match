@@ -1,0 +1,22 @@
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Teller-Match übernehmen</title><style>body{font:16px/1.5 system-ui;background:#eff0e8;color:#222b24;padding:24px;max-width:480px;margin:auto}h1{font-size:28px}button{font:inherit;min-height:48px;padding:12px 16px;border:0;border-radius:12px;background:#294f3a;color:white;width:100%;margin-top:16px}p{margin-bottom:20px}.note{padding:16px;background:#e4eadf;border-radius:12px}</style></head><body><h1>Alles bleibt bei euch.</h1><p>Übernimm deine bestehende Anmeldung, Bewertungen, eigenen Gerichte und Fotos in die gemeinsame App auf <strong>whats4dinner.party</strong>.</p><p>Dein bisheriger gemeinsamer Bereich bleibt erhalten. Deine Anmeldung wird auf die neue Webadresse übertragen. Die Daten auf dieser Seite werden nicht gelöscht. Dein persönlicher Wiederherstellungscode bleibt ebenfalls gültig.</p><p class="note">Öffne dieses Fenster über „Teller-Match übernehmen“ in der neuen App. Bestätige die Übernahme auf jedem Handy, auf dem du bisher Teller-Match genutzt hast.</p><button id="transfer">Meine Daten in die neue App übernehmen</button><p id="status" role="status"></p><script type="module">
+const target='https://whats4dinner.party';
+const status=document.getElementById('status'),button=document.getElementById('transfer');
+let destination=null;button.disabled=true;
+window.addEventListener('message',e=>{
+ if(e.origin!==target||e.source!==window.opener)return;
+ if(e.data?.type==='tm:transfer-ready'){destination=e.source;button.disabled=false;}
+ if(e.data?.type==='tm:transferred'){localStorage.removeItem('sb-zrblwvuhzhvljkmhtvgg-auth-token');status.textContent='Deine Daten wurden übernommen. Du kannst dieses Fenster schließen.';button.disabled=true;}
+});
+// Only the named production origin can receive anything; no tokens occur in URLs.
+if(window.opener)window.opener.postMessage({type:'tm:transfer-open'},target);
+button.onclick=async()=>{
+ if(!window.opener||!destination){status.textContent='Bitte starte die Übernahme in der neuen App unter Mehr.';return;}
+ button.disabled=true;status.textContent='Lokale Daten und Fotos werden vorbereitet …';
+ try{
+ const storage={};for(const key of ['tm_local','tm_who','tm_cloud_v1','sb-zrblwvuhzhvljkmhtvgg-auth-token']){const value=localStorage.getItem(key);if(value!==null)storage[key]=value;}
+ const photos=await new Promise((resolve,reject)=>{const req=indexedDB.open('teller-match-photos',1);req.onupgradeneeded=()=>req.result.createObjectStore('photos');req.onerror=()=>reject(req.error);req.onsuccess=()=>{const db=req.result;const tx=db.transaction('photos','readonly'),store=tx.objectStore('photos');const rows=[];const cursor=store.openCursor();cursor.onsuccess=()=>{const c=cursor.result;if(c){rows.push([c.key,c.value]);c.continue();}};tx.oncomplete=()=>{db.close();resolve(rows);};tx.onerror=()=>reject(tx.error);};});
+ window.opener.postMessage({type:'tm:transfer',payload:{version:1,storage,photos}},target);
+ status.textContent='Daten gesendet. Warte auf die Bestätigung in der neuen App.';
+ }catch(error){status.textContent='Übernahme nicht möglich: '+error.message;button.disabled=false;}
+};
+</script></body></html>
